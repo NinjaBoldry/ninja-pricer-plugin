@@ -1,132 +1,73 @@
 ---
 name: connect-cowork
-description: Set up the Ninja Pricer MCP connection for a Claude Cowork user — walks them through adding the production deploy as a custom connector in Cowork's UI with their `np_live_...` token. Use whenever a Cowork user mentions setting up Ninja Pricer for the first time, rotating their token, or when the existing `ninja-pricer` skill can't reach the MCP server in a Cowork session (tools missing, "no such tool" errors, `-32001 Unauthorized`). For local Claude Code users use the `connect` skill instead — that one writes to `~/.zshenv`, which is meaningless in Cowork's ephemeral VM environment.
+description: Set expectations for a Claude Cowork user trying to connect to the Ninja Pricer MCP server, and redirect them to a path that actually works today. Use whenever a Cowork user mentions setting up Ninja Pricer, hits "couldn't connect" on the custom-connector flow, or asks why the marketplace "Connect" button errors out. As of April 2026 Cowork's custom-connector form has no field for static bearer tokens — only Name, URL, and optional OAuth Client ID/Secret — and the Ninja Pricer MCP server doesn't yet implement OAuth, so there's no working Cowork install path right now. Recommend Claude Code instead and flag OAuth support as the unblock.
 ---
 
-# Connect Ninja Pricer (Cowork)
+# Connect Ninja Pricer (Cowork) — current status
 
-Walks a Claude Cowork user through wiring up the `ninja-pricer` MCP server as a custom connector. Cowork doesn't run MCP servers locally — it reaches out from Anthropic's cloud — so the bundled `.mcp.json` env-var substitution path used by Claude Code (`${NINJA_PRICER_TOKEN}` from a shell file) doesn't apply. Cowork users add the server through the **Connectors** UI instead.
+**As of April 2026, there is no working Cowork install for Ninja Pricer.** This skill exists to be honest about that, save users the dead-end clicking, and route them to Claude Code, which does work today.
 
-This is the Cowork-only path. If the user is on local Claude Code, point them at the `connect` skill. The two are mutually exclusive.
+## Why it doesn't work in Cowork yet
 
-## What's needed
+Cowork's **Add custom connector** form has three fields:
 
-The Ninja Pricer MCP server is a public HTTP endpoint that authenticates with a static bearer token:
+- Name
+- Remote MCP server URL
+- Advanced settings → OAuth Client ID (optional) + OAuth Client Secret (optional)
 
-- **Server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
-- **Auth header:** `Authorization: Bearer np_live_...` (the user's own token)
+There is no field to paste a static bearer token. The connector flow expects the MCP server to either:
 
-Cowork's custom-connector UI accepts a remote MCP URL plus a bearer token, which is exactly the shape this server expects. No OAuth required on the user's side.
+- Be reachable anonymously, or
+- Speak OAuth 2.1 with Dynamic Client Registration per the MCP authorization spec — Cowork performs DCR and walks the user through an in-browser sign-in.
 
-## Decision flow
+The Ninja Pricer MCP server (`https://ninjapricer-production.up.railway.app/api/mcp`) currently only accepts `Authorization: Bearer np_live_...` static tokens. It does not expose OAuth metadata or DCR endpoints. So:
 
-```
-1. Does the user have a token already? → if not, send them to /settings/tokens.
-2. Validate the token against the deploy.
-3. Walk them through Cowork's Connectors UI step by step.
-4. Verify the connector is healthy (tools/list shows ninja-pricer tools).
-5. If the plugin's skill isn't loading, point them at Customize → Browse plugins or upload.
-```
+- Pasting just the URL → Cowork hits the server anonymously → 401 → Cowork tries OAuth discovery → no endpoints → "couldn't connect".
+- Pasting OAuth Client ID/Secret → there's no IdP issuing those for this server → still fails.
 
-## Step 1 — confirm they have a token
+Putting the bearer in a hidden field would help, but no such field exists.
 
-Ask:
+## What to tell the user
 
-> Do you have your `np_live_...` Ninja Pricer token? You can grab one (or rotate the old one) at `https://ninjapricer-production.up.railway.app/settings/tokens` — click "New token" and copy the value. It's shown exactly once.
+Be direct:
 
-If they don't have one, wait until they do. Don't continue without it.
-
-## Step 2 — validate the token before they paste it into Cowork
-
-Cowork's connector UI doesn't surface a clear error if a token is bad — it'll just show "couldn't connect". Validate up front so we catch typos and revoked tokens before they go into Connectors.
-
-If you have shell access in this environment (Cowork code-execution sandbox or local terminal), run:
-
-```bash
-curl -sS -o /dev/null -w "%{http_code}\n" \
-  -X POST https://ninjapricer-production.up.railway.app/api/mcp \
-  -H "Authorization: Bearer np_live_..." \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"connect-cowork","version":"1"}}}'
-```
-
-- **200** → token valid. Continue.
-- **401** → revoked or typo. Send them back to `/settings/tokens` for a fresh one. Don't continue.
-- **other** → deploy issue, not a token problem. Tell the user to ping their admin.
-
-If you don't have shell access, skip validation and warn the user that if Cowork shows "couldn't connect" after the next steps, the token is the most likely culprit.
-
-## Step 3 — walk them through the Connectors UI
-
-Tell the user, in order:
-
-1. In the Claude Desktop app, open the **Cowork** tab.
-2. In the left sidebar, click **Connectors** (or **Customize → Connectors** depending on UI version).
-3. Click **Add custom connector** (sometimes labeled "Add connector" or "+").
-4. In the form:
-   - **Name:** `Ninja Pricer` (or whatever they want — display only)
-   - **Server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
-   - **Authentication:** select bearer-token / authorization-token style. Paste their token (`np_live_...`). If the UI asks for a header name explicitly, it's `Authorization`, value is `Bearer np_live_...`.
-5. Save.
-
-If the UI insists on OAuth (Client ID/Secret) and won't accept a bare bearer token, the user is on a Cowork build where custom connectors are OAuth-only. In that case, fall back to the section "When custom connectors require OAuth" below.
-
-## Step 4 — verify the connector is healthy
-
-Once saved, the connector should report a "connected" or green-dot status. Have the user open a fresh Cowork session (the connector becomes available on next session), and ask Claude something like:
-
-> What products do we price?
-
-If the `ninja-pricer` skill is installed, Claude calls `list_products` and answers with the seeded products (Ninja Notes, Training & White-glove, Service). If you get tools-not-found errors, the connector isn't connected yet — refresh the Connectors panel or restart the session.
-
-## Step 5 — if the skill isn't loading
-
-The connector handles the *tools*. The plugin handles the *skill* that teaches Claude how to drive those tools. They're separate in Cowork.
-
-If tools are present but Claude doesn't seem to know how to use them, the plugin isn't installed. Tell the user:
-
-1. **Customize → Browse plugins** — if Ninja Pricer is listed, click Install.
-2. **Customize → Upload custom plugin** — if they have a `ninja-pricer.plugin` file (you can fetch the latest from `https://github.com/NinjaBoldry/ninja-pricer-plugin/releases/latest`), drag it in.
-
-After install, restart the Cowork session.
-
-## Step 6 — token rotation
-
-When a token is rotated:
-
-1. Issue a new one at `/settings/tokens` (and revoke the old one).
-2. In Cowork: **Connectors → Ninja Pricer → Edit** → paste the new token → save.
-3. Restart the Cowork session so the connector picks up the new value.
-
-No plugin reinstall needed — the plugin doesn't carry credentials.
-
-## When custom connectors require OAuth
-
-Some Cowork builds gate custom connectors behind OAuth Client ID/Secret only. The Ninja Pricer server doesn't currently expose OAuth endpoints (no `/.well-known/oauth-authorization-server`, no Dynamic Client Registration). If the user's Cowork build forces OAuth on custom connectors, this skill cannot complete the install.
-
-Tell the user honestly:
-
-> Your Cowork build appears to require OAuth on custom connectors, but the Ninja Pricer MCP server only supports static bearer tokens right now. Two options:
+> Cowork's custom-connector UI doesn't have a bearer-token field, and the Ninja Pricer MCP server doesn't speak OAuth yet — so there isn't a working Cowork install today. OAuth on the server is on the roadmap; once that's shipped, the Cowork "Add custom connector" flow will Just Work with this URL.
 >
-> 1. Use the local Claude Code path instead — install the plugin from `https://github.com/NinjaBoldry/ninja-pricer-plugin` and follow the `connect` skill there.
-> 2. Wait for OAuth support on the server — that's a known gap and on the roadmap.
+> In the meantime: **install via Claude Code instead.** That path is fully working — `claude plugin marketplace add https://github.com/NinjaBoldry/ninja-pricer-plugin` then `claude plugin install ninja-pricer`, and once you're in a Claude Code session say "set up Ninja Pricer" and the bundled `connect` skill walks you through the rest.
 
-Don't try to fake an OAuth flow or paste the bearer into the Client Secret field — that won't work and may leave a half-broken connector entry.
+Don't have them paste anything into the Cowork form. Don't have them try the OAuth fields. Don't tell them to wait — give them the working alternative.
 
-## What this skill does NOT do
+## What if they really need Cowork specifically
 
-- **Doesn't manage the Cowork session itself.** Connector edits often require a session restart to take effect; the skill can't restart a Cowork session.
-- **Doesn't issue tokens.** Token issuance is at `/settings/tokens` on the deploy.
-- **Doesn't handle local Claude Code setup.** That's the `connect` skill's job — `~/.zshenv` based, totally different mechanism.
-- **Doesn't bypass the env-var injection bug.** Cowork's plugin `.mcp.json` env-var substitution is unreliable as of April 2026 ([claude-code#39125](https://github.com/anthropics/claude-code/issues/39125)). That's exactly why we route credentials through Connectors instead of bundling them in the plugin.
+Some users genuinely can't or won't use Claude Code (no terminal access, IT policy, work primarily in Claude.ai web). For those users:
 
-## Common gotchas
+- The plugin's **skill content** can still be uploaded to Cowork as a `.plugin` file (`Customize → Upload custom plugin`, [latest build here](https://github.com/NinjaBoldry/ninja-pricer-plugin/blob/main/dist/ninja-pricer.plugin)). Claude will know *how* to use Ninja Pricer tools — but without a working connector, there are no tools to call. The skill becomes documentation Claude can read, not a working integration.
+- They can still use the Ninja Pricer **web UI** (`https://ninjapricer-production.up.railway.app`) directly — the MCP server is just a Claude-driven facade over the same data. For workups and quotes, the web UI is the canonical path.
 
-| Symptom | Likely cause | Action |
-|---|---|---|
-| "Couldn't connect" right after saving connector | Token typo, or token revoked | Re-validate via curl (step 2). Re-paste. |
-| Connector saved but tools don't show in session | Session needs restart | Quit and reopen the Cowork session |
-| `-32001 Unauthorized` mid-session | Token revoked while user was active | Issue a new token, edit the connector, restart session |
-| Tools work but Claude doesn't know how to use them | Skill not installed | Install the `ninja-pricer.plugin` file (step 5) |
-| Cowork connector form only shows OAuth fields | Build forces OAuth on custom connectors | Fall back to Claude Code, or wait for server-side OAuth |
+Tell them honestly that the integrated Cowork experience is blocked on OAuth shipping.
+
+## How they'll know when this changes
+
+When OAuth ships on the server, this skill should be rewritten with the actual install steps, and the README's Cowork section will be updated. Watch the repo:
+
+`https://github.com/NinjaBoldry/ninja-pricer-plugin`
+
+Or ping the admin who owns the deploy.
+
+## Don't do these things
+
+- **Don't tell the user to paste their `np_live_...` token into the OAuth Client Secret field.** It won't work, and OAuth secrets get logged differently than headers — could leak.
+- **Don't fabricate a "hidden" bearer-token path that doesn't exist in the UI.** If the user pushes back, show them the screenshot of the form fields and confirm.
+- **Don't suggest editing Cowork config files manually.** Cowork's connector store isn't a user-facing config file; sessions are ephemeral and cloud-managed.
+
+## When OAuth ships (future state — do not act on this yet)
+
+When the deploy adds the four endpoints — `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register` (DCR), `/authorize`, `/token` — and starts emitting `WWW-Authenticate: Bearer resource_metadata="..."` on 401s, Cowork's existing flow will handle everything automatically. The user pastes:
+
+- **Name:** Ninja Pricer
+- **Server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
+- (OAuth fields blank — DCR populates them)
+
+Cowork registers itself as a client, opens a browser tab to the deploy's `/authorize` endpoint, the user signs in with their normal NinjaPricer credentials, consents, and Cowork stores the access token. No paste, no env var, no shell config. That's the target state.
+
+This skill should be rewritten once the server side is live.
