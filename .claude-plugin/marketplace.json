@@ -9,7 +9,7 @@
       "name": "ninja-pricer",
       "description": "Drive the Ninja Pricer pricing engine from Claude — build scenarios, apply bundles, generate quotes, and (for admins) tweak the product catalog. Bundles the ninja-pricer MCP server config and skills that teach Claude the tool surface, error handling, and a guided setup/repair flow.",
       "version": "1.1.0",
-      "source": ".",
+      "source": "./plugins/ninja-pricer",
       "author": {
         "name": "Ninja Concepts"
       }
