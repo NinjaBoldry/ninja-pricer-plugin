@@ -1,13 +1,28 @@
 # Ninja Pricer plugin
 
-Companion plugin for the [Ninja Pricer](https://ninjapricer-production.up.railway.app) pricing engine. Distribution status by client:
+Companion plugin for the [Ninja Pricer](https://ninjapricer-production.up.railway.app) pricing engine. Works with Claude Code and Claude Cowork (Desktop / claude.ai).
 
 | Client | Status |
 |---|---|
-| **Claude Code** (terminal) | ✅ Working |
-| **Claude Cowork** (Desktop / claude.ai) | ⛔ Blocked on server-side OAuth — see below |
+| **Claude Cowork** (Desktop / claude.ai) | ✅ Working — OAuth, no token paste |
+| **Claude Code** (terminal) | ✅ Working — static token via `~/.zshenv` |
 
-## Claude Code (recommended path today)
+## Claude Cowork
+
+1. **Add the MCP server as a custom connector.** Cowork → **Connectors → Add custom connector**:
+   - **Name:** `Ninja Pricer`
+   - **Remote MCP server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
+   - **Advanced settings:** leave OAuth Client ID and Secret blank — Cowork auto-registers via DCR.
+   - Click **Add**.
+2. **Sign in with Microsoft** when the browser opens. Use the same org account you use for Ninja Pricer.
+3. **Upload the plugin** so Claude knows how to drive the tools. Download [`dist/ninja-pricer.plugin`](dist/ninja-pricer.plugin), then in Cowork → **Customize → Upload custom plugin** → drop the file in.
+4. **Restart the Cowork session.** Then ask "what products do we price?" — Claude calls `list_products` and answers.
+
+If anything's off, in any Cowork session say "connect Ninja Pricer in Cowork" — the bundled `connect-cowork` skill walks you through it.
+
+> **No token to manage.** Cowork stores the OAuth token; refreshes happen automatically in the background. Role (admin/sales) is inherited from your Microsoft user every request — change a user's role in the web UI and MCP picks it up immediately.
+
+## Claude Code (terminal)
 
 ```bash
 claude plugin marketplace add https://github.com/NinjaBoldry/ninja-pricer-plugin
@@ -16,26 +31,20 @@ claude plugin install ninja-pricer
 
 Restart Claude Code, then say "set up Ninja Pricer" — the bundled `connect` skill writes your `np_live_...` token to `~/.zshenv` and validates the connection. The `.mcp.json` bundled with the plugin handles MCP server registration automatically.
 
-## Claude Cowork
-
-**Not currently working.** Cowork's "Add custom connector" form has only `Name`, `Remote MCP server URL`, and optional OAuth `Client ID` / `Client Secret` fields — there is no field for a static bearer token. The Ninja Pricer MCP server today only accepts `Authorization: Bearer np_live_...` and does not expose OAuth metadata or Dynamic Client Registration, so Cowork's flow has nowhere to plug in.
-
-The unblock is server-side: ship OAuth 2.1 + DCR on `/api/mcp` per the [MCP authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization). When that lands, Cowork users will be able to add this connector with URL alone — no paste, no token management — and the marketplace "Connect" tile will work too.
-
-Until then, **use Claude Code** for any Claude-driven Ninja Pricer workflow. The web UI at `https://ninjapricer-production.up.railway.app` remains available for direct (non-Claude) use.
-
-The bundled `connect-cowork` skill in the plugin exists only to confirm this status to a Cowork user who tries to set it up — it explicitly tells them not to paste anything into the OAuth fields and redirects them to the Claude Code path.
+If you'd rather use the OAuth path in Claude Code instead of a static token, you can — just point your `.mcp.json` at `https://ninjapricer-production.up.railway.app/api/mcp` without an `Authorization` header. Claude Code will discover the OAuth metadata and walk you through sign-in, same as Cowork. Most local users prefer the static-token path because it's simpler.
 
 ## What's in the plugin
 
 - **`ninja-pricer` skill** — teaches Claude the pricing tool surface (scenarios, bundles, quotes, catalog edits), error decoding, and the sales-vs-admin capability matrix.
-- **`connect` skill** — Claude Code setup/repair. Writes the token to `~/.zshenv`.
-- **`connect-cowork` skill** — explains the current Cowork-blocked status and routes users to Claude Code. Will be rewritten with real install steps once OAuth ships on the server.
-- **`.mcp.json`** — MCP server config consumed by Claude Code. Not used by Cowork.
+- **`connect` skill** — Claude Code setup/repair. Writes a `np_live_...` token to `~/.zshenv`.
+- **`connect-cowork` skill** — Cowork setup/repair. Walks the user through Custom Connector + Microsoft sign-in.
+- **`.mcp.json`** — MCP server config consumed by Claude Code with the static-token path. Excluded from the Cowork build (Cowork registers the server through Connectors instead).
 
-A pre-built Cowork-shaped `.plugin` zip lives at [`dist/ninja-pricer.plugin`](dist/ninja-pricer.plugin). It's only useful as documentation today — without a working connector, the skill has no tools to call. Keep it around for the day OAuth ships.
+A pre-built Cowork-shaped `.plugin` zip lives at [`dist/ninja-pricer.plugin`](dist/ninja-pricer.plugin).
 
 ## Updates
+
+**Cowork:** download the latest `ninja-pricer.plugin` and re-upload via **Customize → Upload custom plugin**. Cowork replaces the previous version.
 
 **Claude Code:**
 ```bash
@@ -44,8 +53,6 @@ claude plugin update ninja-pricer
 ```
 Then quit and relaunch Claude Code.
 
-**Cowork:** N/A until OAuth ships.
-
 ## Building the Cowork `.plugin` artifact from source
 
 ```bash
@@ -53,4 +60,4 @@ cd plugins/ninja-pricer
 zip -r ../../dist/ninja-pricer.plugin . -x ".mcp.json" -x "*.DS_Store"
 ```
 
-`.mcp.json` is excluded from the Cowork build — even when OAuth ships, Cowork will register the server through Connectors, not via plugin-bundled config.
+`.mcp.json` is excluded from the Cowork build because Cowork registers the server through the Connectors UI, not via plugin-bundled config.

@@ -1,7 +1,7 @@
 {
   "name": "ninja-pricer",
   "description": "Drive the Ninja Pricer pricing engine from Claude — build scenarios, apply bundles, generate quotes, and (for admins) tweak the product catalog.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": {
     "name": "Ninja Concepts"
   },

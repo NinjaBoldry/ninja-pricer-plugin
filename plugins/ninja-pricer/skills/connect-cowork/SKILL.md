@@ -1,73 +1,79 @@
 ---
 name: connect-cowork
-description: Set expectations for a Claude Cowork user trying to connect to the Ninja Pricer MCP server, and redirect them to a path that actually works today. Use whenever a Cowork user mentions setting up Ninja Pricer, hits "couldn't connect" on the custom-connector flow, or asks why the marketplace "Connect" button errors out. As of April 2026 Cowork's custom-connector form has no field for static bearer tokens — only Name, URL, and optional OAuth Client ID/Secret — and the Ninja Pricer MCP server doesn't yet implement OAuth, so there's no working Cowork install path right now. Recommend Claude Code instead and flag OAuth support as the unblock.
+description: Set up the Ninja Pricer MCP connection in Claude Cowork (Claude Desktop / claude.ai). Walks the user through adding the production deploy as a custom connector — they paste a URL, leave the OAuth fields blank, and Cowork handles the rest via the standard OAuth 2.1 + Dynamic Client Registration flow against the deploy. The user signs in with their existing Microsoft account when prompted. Use whenever a Cowork user mentions setting up Ninja Pricer for the first time, can't see the pricing tools after a recent install, or is troubleshooting a "couldn't connect" error in Cowork.
 ---
 
-# Connect Ninja Pricer (Cowork) — current status
+# Connect Ninja Pricer (Cowork)
 
-**As of April 2026, there is no working Cowork install for Ninja Pricer.** This skill exists to be honest about that, save users the dead-end clicking, and route them to Claude Code, which does work today.
+The Ninja Pricer MCP server speaks OAuth 2.1 + Dynamic Client Registration as of April 2026, so Cowork's "Add custom connector" flow handles everything automatically — the user pastes a URL, signs in with the Microsoft account they already use for Ninja Pricer, and Cowork stores the resulting token. No `np_live_...` token paste required.
 
-## Why it doesn't work in Cowork yet
+## The actual install
 
-Cowork's **Add custom connector** form has three fields:
+Tell the user, in order:
 
-- Name
-- Remote MCP server URL
-- Advanced settings → OAuth Client ID (optional) + OAuth Client Secret (optional)
+1. In Claude Desktop, switch to the **Cowork** tab.
+2. **Connectors → Add custom connector** (left sidebar, then the "+" or "Add" button).
+3. Fill in the form:
+   - **Name:** `Ninja Pricer`
+   - **Remote MCP server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
+   - **Advanced settings:** leave OAuth Client ID and Client Secret **blank**. Cowork registers itself as a client automatically via DCR.
+4. Click **Add**. Cowork opens a browser tab to sign you in.
+5. Sign in with the **same Microsoft account you use for Ninja Pricer**. Domain allowlist applies, so it must be a real org account.
+6. The browser tab redirects back and Cowork shows the connector as connected.
+7. Either start a new Cowork session or refresh the connector list. The `ninja-pricer` tools should appear.
 
-There is no field to paste a static bearer token. The connector flow expects the MCP server to either:
+Confirm by asking the user to say something like "what products do we price?" — Claude should call `list_products` and reply with the catalog.
 
-- Be reachable anonymously, or
-- Speak OAuth 2.1 with Dynamic Client Registration per the MCP authorization spec — Cowork performs DCR and walks the user through an in-browser sign-in.
+## Skill (this plugin)
 
-The Ninja Pricer MCP server (`https://ninjapricer-production.up.railway.app/api/mcp`) currently only accepts `Authorization: Bearer np_live_...` static tokens. It does not expose OAuth metadata or DCR endpoints. So:
+The connector handles the *tools*. This plugin's skill content (the `ninja-pricer` skill that teaches Claude how to drive the tools) is loaded when the user uploads the `.plugin` file via **Customize → Upload custom plugin**. If they haven't done that yet:
 
-- Pasting just the URL → Cowork hits the server anonymously → 401 → Cowork tries OAuth discovery → no endpoints → "couldn't connect".
-- Pasting OAuth Client ID/Secret → there's no IdP issuing those for this server → still fails.
+- Latest build: `https://github.com/NinjaBoldry/ninja-pricer-plugin/blob/main/dist/ninja-pricer.plugin`
+- Cowork → **Customize → Upload custom plugin** → drop the file in.
+- Restart the Cowork session.
 
-Putting the bearer in a hidden field would help, but no such field exists.
+The plugin upload and the connector setup are independent — connector gives Cowork the tools, plugin gives Claude the knowledge of how to use them. Both are needed.
 
-## What to tell the user
+## Role inheritance
 
-Be direct:
+The token Cowork receives from the OAuth flow inherits the role of the user who signed in:
 
-> Cowork's custom-connector UI doesn't have a bearer-token field, and the Ninja Pricer MCP server doesn't speak OAuth yet — so there isn't a working Cowork install today. OAuth on the server is on the roadmap; once that's shipped, the Cowork "Add custom connector" flow will Just Work with this URL.
->
-> In the meantime: **install via Claude Code instead.** That path is fully working — `claude plugin marketplace add https://github.com/NinjaBoldry/ninja-pricer-plugin` then `claude plugin install ninja-pricer`, and once you're in a Claude Code session say "set up Ninja Pricer" and the bundled `connect` skill walks you through the rest.
+- Microsoft user with **ADMIN** in NinjaPricer → all 63 tools (catalog edits, commissions, rails, etc.)
+- Microsoft user with **SALES** → 16 tools (workups, scenarios, quotes; no catalog/admin writes)
 
-Don't have them paste anything into the Cowork form. Don't have them try the OAuth fields. Don't tell them to wait — give them the working alternative.
+If a user's role changes in the web UI, the change takes effect immediately on the next MCP request — no token rotation, no reconnect.
 
-## What if they really need Cowork specifically
+## Token rotation (automatic)
 
-Some users genuinely can't or won't use Claude Code (no terminal access, IT policy, work primarily in Claude.ai web). For those users:
+OAuth-issued access tokens expire every hour. Cowork automatically refreshes them in the background using a refresh token (good for 30 days). The user does not need to do anything. If they're idle for more than 30 days, they'll be prompted to sign in with Microsoft again on the next use — same as any other OAuth-backed connector.
 
-- The plugin's **skill content** can still be uploaded to Cowork as a `.plugin` file (`Customize → Upload custom plugin`, [latest build here](https://github.com/NinjaBoldry/ninja-pricer-plugin/blob/main/dist/ninja-pricer.plugin)). Claude will know *how* to use Ninja Pricer tools — but without a working connector, there are no tools to call. The skill becomes documentation Claude can read, not a working integration.
-- They can still use the Ninja Pricer **web UI** (`https://ninjapricer-production.up.railway.app`) directly — the MCP server is just a Claude-driven facade over the same data. For workups and quotes, the web UI is the canonical path.
+## Troubleshooting
 
-Tell them honestly that the integrated Cowork experience is blocked on OAuth shipping.
+| Symptom | Cause | Action |
+|---|---|---|
+| "Couldn't connect" right after clicking Add | Likely a transient deploy/network blip | Try Add again. If persistent, check the deploy's status page. |
+| Browser opens to Microsoft sign-in but bounces with "access denied" | Email domain not on the allowlist (`ALLOWED_EMAIL_DOMAIN`) | Confirm the user is signing in with their org account, not personal Microsoft |
+| Sign-in succeeds but Cowork shows the connector errored | Race condition between callback and connector save — known intermittent | Remove the connector, add it again. Should work the second time. |
+| Tools don't appear in a fresh Cowork session | Connector saved but session started before it finished registering | New Cowork session; the connector applies on next session |
+| Tools appear but Claude doesn't seem to know how to use them | Plugin not installed (only the connector is) | Upload `ninja-pricer.plugin` via **Customize → Upload custom plugin** |
+| Old `np_live_...` token also configured somewhere | Both auth paths active is fine — server accepts either | No action needed; OAuth is preferred but `np_live_*` tokens still work |
 
-## How they'll know when this changes
+## Token revocation (if needed)
 
-When OAuth ships on the server, this skill should be rewritten with the actual install steps, and the README's Cowork section will be updated. Watch the repo:
+To invalidate an OAuth-issued connection (e.g., user leaves the company, suspected token leak):
 
-`https://github.com/NinjaBoldry/ninja-pricer-plugin`
+- Delete the user's row in NinjaPricer (cascades to all their OAuth tokens), or
+- The next time we add a `/revoke` endpoint or admin "kill OAuth tokens for user X" UI, do it through that.
 
-Or ping the admin who owns the deploy.
+For now, deletion via the admin UI is the immediate kill-switch.
 
-## Don't do these things
+## What this skill does NOT do
 
-- **Don't tell the user to paste their `np_live_...` token into the OAuth Client Secret field.** It won't work, and OAuth secrets get logged differently than headers — could leak.
-- **Don't fabricate a "hidden" bearer-token path that doesn't exist in the UI.** If the user pushes back, show them the screenshot of the form fields and confirm.
-- **Don't suggest editing Cowork config files manually.** Cowork's connector store isn't a user-facing config file; sessions are ephemeral and cloud-managed.
+- **Doesn't handle local Claude Code setup.** That's the `connect` skill — different mechanism (`~/.zshenv` based, paste a static token).
+- **Doesn't issue tokens.** OAuth tokens are issued automatically by the deploy on sign-in; static `np_live_...` tokens are issued at `/settings/tokens` for users who want them for direct API use.
+- **Doesn't restart Cowork sessions.** When the connector or plugin changes, the user has to start a fresh session for changes to take effect.
+- **Doesn't help non-employees.** The Microsoft sign-in is gated by the deploy's email-domain allowlist. External users can't connect even if Cowork lets them try.
 
-## When OAuth ships (future state — do not act on this yet)
+## When OAuth is unavailable
 
-When the deploy adds the four endpoints — `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register` (DCR), `/authorize`, `/token` — and starts emitting `WWW-Authenticate: Bearer resource_metadata="..."` on 401s, Cowork's existing flow will handle everything automatically. The user pastes:
-
-- **Name:** Ninja Pricer
-- **Server URL:** `https://ninjapricer-production.up.railway.app/api/mcp`
-- (OAuth fields blank — DCR populates them)
-
-Cowork registers itself as a client, opens a browser tab to the deploy's `/authorize` endpoint, the user signs in with their normal NinjaPricer credentials, consents, and Cowork stores the access token. No paste, no env var, no shell config. That's the target state.
-
-This skill should be rewritten once the server side is live.
+If the deploy's OAuth endpoints are down (rare; would also affect the web UI), `np_live_...` static tokens still work as a fallback for direct API use. But Cowork's connector flow will show "couldn't connect" because it can't complete the OAuth dance. Users in that situation should fall back to the local Claude Code path (`connect` skill) until the deploy is healthy.
